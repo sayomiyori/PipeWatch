@@ -1,0 +1,49 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+    environment:
+      - CLICKHOUSE_DB=pipewatch
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=pipewatch
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    # Simple healthcheck; if it fails, app will still try to create the table on startup.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7
+    ports:
+      - "16379:6379"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "18080:8000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=pipewatch
+      - CLICKHOUSE_DATABASE=pipewatch
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - APP_BATCH_FLUSH_INTERVAL_SECONDS=1
+      - APP_BATCH_SIZE=1000
+
+volumes:
+  clickhouse_data:
+

@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+clickhouse-connect
+redis
+prometheus-client
+httpx
+websockets
+
+pytest
+pytest-asyncio
+
