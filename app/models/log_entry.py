@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-
 LogLevel = Literal["debug", "info", "warn", "error", "fatal"]
 
 LEVEL_TO_INT: dict[LogLevel, int] = {

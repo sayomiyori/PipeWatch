@@ -10,7 +10,6 @@ from starlette.responses import PlainTextResponse
 
 from app.config import settings
 
-
 REQUEST_COUNT = Counter(
     "pipewatch_request_total",
     "Total requests",
@@ -26,6 +25,15 @@ LOGS_ACCEPTED = Counter(
     "pipewatch_logs_accepted_total",
     "Total accepted logs via ingest endpoints",
     ["endpoint", "service"],
+)
+
+ALERT_EVALUATIONS = Counter(
+    "pipewatch_alert_evaluations_total",
+    "Alert rule evaluations (one increment per rule per cycle)",
+)
+ALERTS_FIRED = Counter(
+    "pipewatch_alerts_fired_total",
+    "Times an alert fired (threshold met after cooldown)",
 )
 
 
@@ -57,4 +65,3 @@ def register_metrics_route(app) -> None:
     @app.get("/metrics")
     def metrics() -> PlainTextResponse:
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-

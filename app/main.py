@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI
@@ -92,6 +91,7 @@ async def lifespan(app: FastAPI):
 
     app.state.alert_rules = {}
     app.state.alert_events = []
+    app.state.alert_last_fire = {}
 
     # Background tasks.
     flush_task = asyncio.create_task(_flush_loop(app))
@@ -111,7 +111,11 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="PipeWatch",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 if settings.METRICS_ENABLED:
     app.add_middleware(MetricsMiddleware)

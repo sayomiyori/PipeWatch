@@ -5,7 +5,9 @@ redis
 prometheus-client
 httpx
 websockets
+click
+rich
 
 pytest
 pytest-asyncio
-
+ruff

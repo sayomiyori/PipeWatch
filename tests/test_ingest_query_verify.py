@@ -1,11 +1,9 @@
 import asyncio
 import os
 import sys
-from datetime import timezone
 
 import httpx
 import pytest
-
 
 # Ensure `app.*` imports work when pytest is started from repo root.
 THIS_DIR = os.path.dirname(__file__)

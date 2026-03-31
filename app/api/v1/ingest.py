@@ -4,11 +4,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
 from app.middleware.metrics import LOGS_ACCEPTED
 from app.models.log_entry import LogEntryCreate
-
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1", tags=["ingest"])
 

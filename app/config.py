@@ -6,7 +6,6 @@ class Settings:
     APP_PORT: int = int(os.getenv("APP_PORT", "8000"))
 
     CLICKHOUSE_HOST: str = os.getenv("CLICKHOUSE_HOST", "clickhouse")
-    # clickhouse-connect default uses HTTP driver, which expects port 8123.
     CLICKHOUSE_PORT: int = int(os.getenv("CLICKHOUSE_PORT", "8123"))
     CLICKHOUSE_USER: str = os.getenv("CLICKHOUSE_USER", "default")
     CLICKHOUSE_PASSWORD: str = os.getenv("CLICKHOUSE_PASSWORD", "")
@@ -36,6 +35,15 @@ class Settings:
         "y",
     )
 
+    # Alert engine
+    ALERT_EVAL_INTERVAL_SECONDS: float = float(
+        os.getenv("ALERT_EVAL_INTERVAL_SECONDS", "30")
+    )
+    ALERT_COOLDOWN_SECONDS: float = float(
+        os.getenv("ALERT_COOLDOWN_SECONDS", "300")
+    )
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
 
 settings = Settings()
-

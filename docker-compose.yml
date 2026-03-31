@@ -10,9 +10,8 @@ services:
       - CLICKHOUSE_PASSWORD=pipewatch
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-    # Simple healthcheck; if it fails, app will still try to create the table on startup.
     healthcheck:
-      test: ["CMD", "sh", "-c", "clickhouse-client --query 'SELECT 1'"]
+      test: [ "CMD", "sh", "-c", "clickhouse-client --query 'SELECT 1'" ]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -43,7 +42,39 @@ services:
       - REDIS_PORT=6379
       - APP_BATCH_FLUSH_INTERVAL_SECONDS=1
       - APP_BATCH_SIZE=1000
+      - ALERT_EVAL_INTERVAL_SECONDS=30
+      - ALERT_COOLDOWN_SECONDS=300
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    ports:
+      - "19090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/etc/prometheus/console_libraries
+      - --web.console.templates=/etc/prometheus/consoles
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    ports:
+      - "13000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:13000
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
 volumes:
   clickhouse_data:
-
