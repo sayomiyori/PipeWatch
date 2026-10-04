@@ -283,10 +283,10 @@ def alerts_list(ctx: click.Context) -> None:
         tbl.add_row(
             rid[:8] + "…",
             rule.get("name", ""),
-            rule.get("service") or "[dim]any[/dim]",
-            rule.get("min_level") or "[dim]any[/dim]",
-            str(rule.get("window_seconds", "")),
-            str(rule.get("threshold_count", "")),
+            rule.get("service_filter") or "[dim]any[/dim]",
+            rule.get("level_filter") or "[dim]any[/dim]",
+            str(rule.get("window_minutes", 1) * 60),
+            str(rule.get("threshold", "")),
         )
     console.print(tbl)
 
@@ -311,11 +311,14 @@ def alerts_create(
     callback_url: str | None,
 ) -> None:
     """Create a new alert rule."""
+    if window_seconds <= 0 or window_seconds % 60:
+        raise click.BadParameter("must be a positive multiple of 60; the API uses minutes", param_hint="--window-seconds")
     base_url = ctx.obj["base_url"]
     payload = {
-        "name": name, "service": service, "min_level": min_level,
-        "window_seconds": window_seconds, "threshold_count": threshold_count,
-        "callback_url": callback_url,
+        "name": name, "service_filter": service, "level_filter": min_level,
+        "window_minutes": window_seconds // 60, "threshold": threshold_count,
+        "notification_channel": "webhook" if callback_url else None,
+        "notification_target": callback_url,
     }
     r = httpx.post(f"{base_url}/api/v1/alerts", json=payload, timeout=10)
     r.raise_for_status()

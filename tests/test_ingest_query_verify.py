@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -39,10 +40,13 @@ def clickhouse_service():
 async def test_ingest_then_query_then_verify_in_clickhouse(clickhouse_service):
     from app.main import app as fastapi_app
 
-    transport = httpx.ASGITransport(app=fastapi_app, lifespan="on")
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        trace_ids = [f"tr-{i}-test" for i in range(3)]
-        service = "svc-1"
+    transport = httpx.ASGITransport(app=fastapi_app)
+    async with fastapi_app.router.lifespan_context(fastapi_app), httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        run_id = uuid4().hex
+        trace_ids = [f"tr-{i}-{run_id}" for i in range(3)]
+        service = f"svc-{run_id}"
 
         logs = [
             {
@@ -77,20 +81,19 @@ async def test_ingest_then_query_then_verify_in_clickhouse(clickhouse_service):
         # Verify query endpoint returns inserted entries.
         r2 = await client.get(
             "/api/v1/logs",
-            params={"service": service, "trace_id": trace_ids[0], "limit": 10},
+            params={"service": service, "trace_id": trace_ids[0], "size": 10},
         )
         assert r2.status_code == 200
         payload = r2.json()
-        assert payload["count"] >= 1
+        assert payload["total"] == 1
         assert any(item["trace_id"] == trace_ids[0] for item in payload["items"])
 
         # Verify stats endpoint returns data.
         r3 = await client.get(
             "/api/v1/logs/stats",
-            params={"group_by": "level", "service": service, "limit": 10},
         )
         assert r3.status_code == 200
         stats = r3.json()
-        assert stats["group_by"] == "level"
-        assert isinstance(stats["items"], list)
+        assert stats["total_count"] >= 3
+        assert stats["count_by_level"]["error"] >= 2
 

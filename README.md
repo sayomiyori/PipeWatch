@@ -172,6 +172,12 @@ curl -s http://localhost:18080/api/v1/logs/stats | jq
 | `pipewatch_alerts_active_rules` | Gauge | Active alert rules count |
 | `pipewatch_live_tail_connections` | Gauge | Active WebSocket connections |
 
+Rule body: `name`, optional `service_filter`, optional `level_filter` (severity **≥** this level), `window_minutes`, `threshold`, optional `notification_channel` and `notification_target`, and `cooldown_minutes`.
+
+CLI flags retain `--service`, `--min-level`, `--threshold-count` and
+`--window-seconds`; the CLI maps these to the API fields. Window seconds must be
+a positive multiple of 60. `--callback-url` maps to a webhook notification target.
+
 ## CLI
 
 ```bash

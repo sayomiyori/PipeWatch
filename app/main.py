@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -15,6 +16,8 @@ from app.services.alert_engine import AlertEngine
 from app.services.clickhouse import ClickHouseService
 from app.services.stream import RedisStreamPublisher
 from app.ws.live_tail import router as ws_router
+
+logger = logging.getLogger(__name__)
 
 
 async def _flush_loop(app: FastAPI) -> None:
@@ -44,24 +47,23 @@ async def _flush_loop(app: FastAPI) -> None:
             try:
                 item = await asyncio.wait_for(queue.get(), timeout=timeout if timeout > 0 else 0.0)
                 batch.append(item)
-                if len(batch) >= batch_size:
-                    await asyncio.to_thread(clickhouse.insert_logs, batch)
-                    try:
-                        await publisher.publish_logs(batch)
-                    except Exception:
-                        # Tailing depends on Redis; ingestion must keep working.
-                        pass
-                    batch.clear()
-                    last_flush_monotonic = loop.time()
             except asyncio.TimeoutError:
-                if batch:
+                pass
+            if batch and (len(batch) >= batch_size or loop.time() - last_flush_monotonic >= interval):
+                try:
                     await asyncio.to_thread(clickhouse.insert_logs, batch)
-                    try:
-                        await publisher.publish_logs(batch)
-                    except Exception:
-                        pass
-                    batch.clear()
-                    last_flush_monotonic = loop.time()
+                except Exception:
+                    # Keep the accepted batch and apply backpressure until storage recovers.
+                    logger.exception("Log batch flush failed; retrying")
+                    await asyncio.sleep(interval)
+                    continue
+                try:
+                    await publisher.publish_logs(batch)
+                except Exception:
+                    # Tailing depends on Redis; ingestion must keep working.
+                    pass
+                batch.clear()
+                last_flush_monotonic = loop.time()
     except asyncio.CancelledError:
         # Best-effort final flush on shutdown.
         if batch:

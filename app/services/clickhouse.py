@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import clickhouse_connect
@@ -11,13 +11,13 @@ from app.models.log_entry import LEVEL_TO_INT, LogLevel
 
 
 def _escape_sql_string(value: str) -> str:
-    return value.replace("'", "''")
+    return value.replace("\\", "\\\\").replace("'", "''")
 
 
 def _format_datetime64_3(ts: datetime) -> str:
     ts_utc = ts
     if ts.tzinfo is not None:
-        ts_utc = ts.astimezone().replace(tzinfo=None)
+        ts_utc = ts.astimezone(timezone.utc).replace(tzinfo=None)
     base = ts_utc.strftime("%Y-%m-%d %H:%M:%S.%f")
     return base[:-3]
 
@@ -36,6 +36,8 @@ class ClickHouseService:
             username=settings.CLICKHOUSE_USER,
             password=settings.CLICKHOUSE_PASSWORD or None,
             database=settings.CLICKHOUSE_DATABASE,
+            # HTTP handlers and the background flush share this client.
+            autogenerate_session_id=False,
         )
         self._queries = self._build_queries()
 

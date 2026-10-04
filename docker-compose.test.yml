@@ -1,0 +1,46 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24
+    environment:
+      CLICKHOUSE_DB: pipewatch_test
+      CLICKHOUSE_USER: verification
+      CLICKHOUSE_PASSWORD: local-test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "127.0.0.1:58123:8123"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "verification", "--password", "local-test-only", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:56383:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  app:
+    build: .
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: verification
+      CLICKHOUSE_PASSWORD: local-test-only
+      CLICKHOUSE_DATABASE: pipewatch_test
+      REDIS_HOST: redis
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+    ports:
+      - "127.0.0.1:38084:8000"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
