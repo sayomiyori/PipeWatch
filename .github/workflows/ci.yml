@@ -8,6 +8,14 @@ on:
 jobs:
   lint-test-build:
     runs-on: ubuntu-latest
+    env:
+      CLICKHOUSE_HOST: 127.0.0.1
+      CLICKHOUSE_PORT: "58123"
+      CLICKHOUSE_USER: verification
+      CLICKHOUSE_PASSWORD: local-test-only
+      CLICKHOUSE_DATABASE: pipewatch_test
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "56383"
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +30,19 @@ jobs:
           pip install -r requirements.txt
 
       - name: Ruff
-        run: ruff check app cli tests
+        run: python -m ruff check app cli tests scripts
+
+      - name: Start test infrastructure
+        run: docker compose -p pipewatch-ci -f docker-compose.test.yml up -d --wait --wait-timeout 180 clickhouse redis
 
       - name: Pytest
-        run: pytest -q
+        run: |
+          python -m pytest -q --junitxml=.pytest_cache/ci.xml
+          python -c "import xml.etree.ElementTree as E; assert not E.parse('.pytest_cache/ci.xml').findall('.//skipped'), 'Integration tests must not be skipped'"
 
       - name: Docker build
         run: docker build -t pipewatch:ci .
+
+      - name: Stop test infrastructure
+        if: always()
+        run: docker compose -p pipewatch-ci -f docker-compose.test.yml down

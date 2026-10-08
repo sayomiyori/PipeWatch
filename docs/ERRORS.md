@@ -14,6 +14,15 @@ delayed a neighbouring timer by 320 ms before and 24 ms after; all three routes
 have responsiveness regressions. Full suite 25 passed, Ruff clean; source HTTP,
 Redis WebSocket and CLI smoke passed. Independent review approved.
 
+## 2026-10-09: CI test discovery and missing infrastructure
+
+GitHub run `37849286678` failed collection with `ModuleNotFoundError: app`;
+the pytest launcher did not add the repository root to Python's import path.
+Use the locally verified `python -m pytest` invocation. The workflow now starts
+the existing test Compose ClickHouse/Redis services, supplies isolated test
+configuration and rejects skipped tests through its JUnit report. Cleanup stops
+only that Compose project without deleting volumes.
+
 ## 2026-10-03 verification
 
 | Symptom | Root cause | Fix | Regression |
