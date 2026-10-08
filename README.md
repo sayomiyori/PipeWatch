@@ -1,5 +1,14 @@
 # PipeWatch
 
+Local verification on 2026-10-09: 25 tests passed with real ClickHouse/Redis;
+Ruff and source HTTP/WebSocket/CLI checks passed. Graceful shutdown drains the
+queue after completing in-flight inserts; query handlers use a threadpool.
+
+Deployment boundary: standalone APIs and alert management have no identity or
+tenant isolation. Alert callbacks can target private network addresses. Keep
+this service on a trusted private network until authorization and egress policy
+are implemented. In-memory queues, rules and history do not survive process loss.
+
 [![CI](https://github.com/sayomiyori/PipeWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sayomiyori/PipeWatch/actions)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](#)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](#)

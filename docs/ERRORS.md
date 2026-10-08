@@ -1,5 +1,19 @@
 # Verified defects
 
+## 2026-10-09: Shutdown draining and blocking queries
+
+Cancellation during insert/publication could duplicate a confirmed batch and
+leave queued records unsaved. Shield the in-flight insert, clear confirmed data
+before Redis publication, then drain queued batches on graceful cancellation.
+Two regressions cover cancellation during insert and publication with 100 unique
+records. Abrupt process loss remains unsafe because the ingest queue is in memory.
+
+Three async query endpoints called synchronous ClickHouse methods on the event
+loop. Sync handlers now use FastAPI's threadpool. A real 300 ms database query
+delayed a neighbouring timer by 320 ms before and 24 ms after; all three routes
+have responsiveness regressions. Full suite 25 passed, Ruff clean; source HTTP,
+Redis WebSocket and CLI smoke passed. Independent review approved.
+
 ## 2026-10-03 verification
 
 | Symptom | Root cause | Fix | Regression |

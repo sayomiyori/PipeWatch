@@ -36,6 +36,21 @@ async def _flush_loop(app: FastAPI) -> None:
     batch_size = int(settings.APP_BATCH_SIZE)
     last_flush_monotonic = asyncio.get_event_loop().time()
 
+    async def persist_batch() -> None:
+        # Cancellation cannot stop a DB write already running in a thread.
+        write = asyncio.create_task(asyncio.to_thread(clickhouse.insert_logs, list(batch)))
+        try:
+            await asyncio.shield(write)
+        except asyncio.CancelledError:
+            try:
+                await write
+            except Exception:
+                logger.exception("In-flight log flush failed during shutdown")
+            else:
+                batch.clear()
+            raise
+        batch.clear()
+
     try:
         while True:
             loop = asyncio.get_event_loop()
@@ -50,31 +65,33 @@ async def _flush_loop(app: FastAPI) -> None:
             except asyncio.TimeoutError:
                 pass
             if batch and (len(batch) >= batch_size or loop.time() - last_flush_monotonic >= interval):
+                committed = list(batch)
                 try:
-                    await asyncio.to_thread(clickhouse.insert_logs, batch)
+                    await persist_batch()
                 except Exception:
                     # Keep the accepted batch and apply backpressure until storage recovers.
                     logger.exception("Log batch flush failed; retrying")
                     await asyncio.sleep(interval)
                     continue
                 try:
-                    await publisher.publish_logs(batch)
+                    await publisher.publish_logs(committed)
                 except Exception:
                     # Tailing depends on Redis; ingestion must keep working.
                     pass
-                batch.clear()
                 last_flush_monotonic = loop.time()
     except asyncio.CancelledError:
-        # Best-effort final flush on shutdown.
-        if batch:
-            try:
-                await asyncio.to_thread(clickhouse.insert_logs, batch)
+        # Drain accepted records while storage is available; live tail is best effort.
+        while batch or not queue.empty():
+            while len(batch) < batch_size:
                 try:
-                    await publisher.publish_logs(batch)
-                except Exception:
-                    pass
+                    batch.append(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            try:
+                await persist_batch()
             except Exception:
-                pass
+                logger.exception("Final log flush failed; accepted records remain in memory")
+                break
         raise
 
 

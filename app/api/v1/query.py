@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/v1", tags=["query"])
 
 
 @router.get("/logs")
-async def get_logs(
+def get_logs(
     request: Request,
     service: str | None = None,
     level: LogLevel | None = None,
@@ -39,7 +39,7 @@ async def get_logs(
 
 
 @router.get("/logs/stats")
-async def get_logs_stats(
+def get_logs_stats(
     request: Request,
     from_ts: datetime | None = None,
     to_ts: datetime | None = None,
@@ -55,7 +55,7 @@ async def get_logs_stats(
 
 
 @router.get("/logs/services")
-async def get_services(request: Request) -> dict[str, Any]:
+def get_services(request: Request) -> dict[str, Any]:
     """Returns unique services with last_seen timestamp and total log count."""
     services = request.app.state.clickhouse.query_services()
     return {"count": len(services), "services": services}
