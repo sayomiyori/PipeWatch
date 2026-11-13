@@ -4,7 +4,11 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+
+from app.config import settings
+from app.services.identity import authorize
+from app.services.stream import stream_name
 
 router = APIRouter()
 
@@ -20,6 +24,8 @@ async def _stream_logs(
     try:
         while True:
             try:
+                if settings.PLATFORM_AUTH_ENABLED:
+                    await authorize(websocket, "tenant.read")
                 data = await redis.xread({stream: last_id}, count=100, block=5000)
             except asyncio.CancelledError:
                 break
@@ -46,6 +52,8 @@ async def _stream_logs(
                         raise
                     except Exception:
                         continue
+    except HTTPException as exc:
+        await websocket.close(code=1011 if exc.status_code == 503 else 1008)
     except WebSocketDisconnect:
         return
     finally:
@@ -65,15 +73,23 @@ async def tail_ws(websocket: WebSocket) -> None:
       start    – latest (default) | begin
     """
     params = websocket.query_params
+    try:
+        tenant_id = await authorize(websocket, "tenant.read")
+    except HTTPException as exc:
+        await websocket.close(code=1011 if exc.status_code == 503 else 1008)
+        return
     service = params.get("service")
-    if not service:
+    if not service or len(service) > 256:
         await websocket.close(code=1008)
         return
 
     level_filter = params.get("level") or None
+    if level_filter not in (None, "debug", "info", "warn", "error", "fatal"):
+        await websocket.close(code=1008)
+        return
     start = params.get("start", "latest")
     last_id = "$" if start == "latest" else "0-0"
-    stream = f"logs:{service}"
+    stream = stream_name(tenant_id, service)
 
     if websocket.app.state.redis is None:
         await websocket.close(code=1011)
@@ -85,17 +101,4 @@ async def tail_ws(websocket: WebSocket) -> None:
 @router.websocket("/ws/live-tail")
 async def live_tail_ws(websocket: WebSocket) -> None:
     """Backward-compatible alias for /ws/tail (no level filter)."""
-    params = websocket.query_params
-    service = params.get("service")
-    if not service:
-        await websocket.close(code=1008)
-        return
-
-    start = params.get("start", "latest")
-    last_id = "$" if start == "latest" else "0-0"
-
-    if websocket.app.state.redis is None:
-        await websocket.close(code=1011)
-        return
-
-    await _stream_logs(websocket, f"logs:{service}", last_id, None)
+    await tail_ws(websocket)

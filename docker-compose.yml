@@ -2,8 +2,8 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:24
     ports:
-      - "18123:8123"
-      - "19000:9000"
+      - "127.0.0.1:18123:8123"
+      - "127.0.0.1:19000:9000"
     environment:
       - CLICKHOUSE_DB=pipewatch
       - CLICKHOUSE_USER=default
@@ -18,20 +18,28 @@ services:
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
     ports:
-      - "16379:6379"
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "18080:8000"
+      - "127.0.0.1:18080:8000"
     depends_on:
       clickhouse:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
@@ -44,13 +52,22 @@ services:
       - APP_BATCH_SIZE=1000
       - ALERT_EVAL_INTERVAL_SECONDS=30
       - ALERT_COOLDOWN_SECONDS=300
+      - PLATFORM_AUTH_ENABLED=${PLATFORM_AUTH_ENABLED:-false}
+      - AUTHFORTRESS_URL=${AUTHFORTRESS_URL:-}
+      - CALLBACK_TRUSTED_ORIGINS=${CALLBACK_TRUSTED_ORIGINS:-}
+      - TELEGRAM_NOTIFICATIONS_ENABLED=${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
 
   prometheus:
     image: prom/prometheus:v2.52.0
     ports:
-      - "19090:9090"
+      - "127.0.0.1:19090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     command:
@@ -64,7 +81,7 @@ services:
   grafana:
     image: grafana/grafana:11.0.0
     ports:
-      - "13000:3000"
+      - "127.0.0.1:13000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -78,3 +95,4 @@ services:
 
 volumes:
   clickhouse_data:
+  redis_data:

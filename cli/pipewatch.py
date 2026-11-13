@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import click
 import httpx
@@ -24,6 +26,15 @@ LEVEL_COLORS: dict[str, str] = {
     "error": "red",
     "fatal": "bold magenta",
 }
+
+
+def _auth_headers() -> dict[str, str]:
+    headers = {}
+    if token := os.getenv("PIPEWATCH_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    if tenant_id := os.getenv("PIPEWATCH_TENANT_ID"):
+        headers["X-Tenant-ID"] = tenant_id
+    return headers
 
 
 def _parse_last(value: str) -> tuple[datetime, datetime]:
@@ -92,16 +103,17 @@ async def _tail_async(
     base_url: str, service: str, level: str | None, start: str
 ) -> None:
     ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://")
-    qs = f"service={service}&start={start}"
+    params = {"service": service, "start": start}
     if level:
-        qs += f"&level={level}"
-    url = f"{ws_url}/ws/tail?{qs}"
+        params["level"] = level
+    url = f"{ws_url}/ws/tail?{urlencode(params)}"
 
     filter_desc = f"level=[bold]{level}[/bold]" if level else "all levels"
     console.print(f"[dim]Connecting to [bold]{service}[/bold] ({filter_desc})  Ctrl-C to stop[/dim]")
 
     try:
-        async with websockets.connect(url) as ws:
+        header_arg = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+        async with websockets.connect(url, **{header_arg: _auth_headers()}) as ws:
             async for raw in ws:
                 try:
                     msg = json.loads(raw)
@@ -170,7 +182,7 @@ def query_cmd(
         params["to_ts"]   = to_ts.isoformat()
 
     try:
-        r = httpx.get(f"{base_url}/api/v1/logs", params=params, timeout=15)
+        r = httpx.get(f"{base_url}/api/v1/logs", params=params, headers=_auth_headers(), timeout=15)
         r.raise_for_status()
     except httpx.HTTPError as exc:
         console.print(f"[red]HTTP error: {exc}[/red]")
@@ -219,7 +231,7 @@ def stats(ctx: click.Context, last: str) -> None:
     params = {"from_ts": from_ts.isoformat(), "to_ts": to_ts.isoformat()}
 
     try:
-        r = httpx.get(f"{base_url}/api/v1/logs/stats", params=params, timeout=15)
+        r = httpx.get(f"{base_url}/api/v1/logs/stats", params=params, headers=_auth_headers(), timeout=15)
         r.raise_for_status()
     except httpx.HTTPError as exc:
         console.print(f"[red]HTTP error: {exc}[/red]")
@@ -271,7 +283,7 @@ def alerts() -> None:
 def alerts_list(ctx: click.Context) -> None:
     """List all alert rules."""
     base_url = ctx.obj["base_url"]
-    r = httpx.get(f"{base_url}/api/v1/alerts", timeout=10)
+    r = httpx.get(f"{base_url}/api/v1/alerts", headers=_auth_headers(), timeout=10)
     r.raise_for_status()
     rules = r.json().get("rules", {})
     if not rules:
@@ -320,7 +332,7 @@ def alerts_create(
         "notification_channel": "webhook" if callback_url else None,
         "notification_target": callback_url,
     }
-    r = httpx.post(f"{base_url}/api/v1/alerts", json=payload, timeout=10)
+    r = httpx.post(f"{base_url}/api/v1/alerts", json=payload, headers=_auth_headers(), timeout=10)
     r.raise_for_status()
     rid = r.json().get("rule_id", "?")
     console.print(f"[green]Created rule [bold]{rid}[/bold][/green]")
@@ -332,7 +344,7 @@ def alerts_create(
 def alerts_delete(ctx: click.Context, rule_id: str) -> None:
     """Delete an alert rule by ID."""
     base_url = ctx.obj["base_url"]
-    r = httpx.delete(f"{base_url}/api/v1/alerts/{rule_id}", timeout=10)
+    r = httpx.delete(f"{base_url}/api/v1/alerts/{rule_id}", headers=_auth_headers(), timeout=10)
     r.raise_for_status()
     console.print(f"[yellow]Deleted rule {rule_id}[/yellow]")
 
