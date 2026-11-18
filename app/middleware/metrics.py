@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
@@ -41,14 +41,15 @@ class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Response]
     ) -> Response:
-        if not settings.METRICS_ENABLED:
+        if not settings.METRICS_ENABLED or settings.PLATFORM_AUTH_ENABLED:
             return await call_next(request)
 
         start = time.perf_counter()
         response = await call_next(request)
         elapsed = time.perf_counter() - start
 
-        path = request.url.path
+        route = request.scope.get("route")
+        path = getattr(route, "path", "unmatched")
         REQUEST_COUNT.labels(
             method=request.method,
             path=path,
@@ -64,4 +65,6 @@ def register_metrics_route(app) -> None:
 
     @app.get("/metrics")
     def metrics() -> PlainTextResponse:
+        if settings.PLATFORM_AUTH_ENABLED:
+            raise HTTPException(404, "Metrics are not exposed in platform mode")
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

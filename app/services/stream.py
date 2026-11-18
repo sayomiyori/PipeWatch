@@ -8,6 +8,10 @@ from app.config import settings
 from app.models.log_entry import LogLevel, level_from_int
 
 
+def stream_name(tenant_id: str, service: str) -> str:
+    return f"{settings.REDIS_KEY_PREFIX}:tenant:{tenant_id}:logs:{service}" if tenant_id else f"logs:{service}"
+
+
 def _log_to_stream_fields(record: dict[str, Any]) -> dict[str, str]:
     level_raw = record.get("level")
     if isinstance(level_raw, int):
@@ -38,7 +42,7 @@ class RedisStreamPublisher:
 
     async def close(self) -> None:
         try:
-            await self._redis.close()
+            await self._redis.aclose()
         except Exception:
             pass
 
@@ -54,7 +58,7 @@ class RedisStreamPublisher:
         pipe = self._redis.pipeline()
         for r in records:
             service = str(r.get("service", "unknown"))
-            stream = f"logs:{service}"
+            stream = stream_name(r.get("tenant_id", ""), service)
             fields = _log_to_stream_fields(r)
             pipe.xadd(stream, fields, maxlen=100_000)
 
