@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import suppress
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,7 +11,7 @@ from fastapi import FastAPI
 
 
 @pytest.mark.asyncio
-async def test_flush_recovers_from_temporary_database_failure(monkeypatch):
+async def test_flush_recovers_from_temporary_database_failure(monkeypatch, redis_state):
     monkeypatch.setattr(settings, "APP_BATCH_SIZE", 1)
     monkeypatch.setattr(settings, "APP_BATCH_FLUSH_INTERVAL_SECONDS", 0.01)
     loop = asyncio.get_running_loop()
@@ -27,11 +28,11 @@ async def test_flush_recovers_from_temporary_database_failure(monkeypatch):
         loop.call_soon_threadsafe(delivered.set)
 
     app = FastAPI()
-    app.state.ingest_queue = asyncio.Queue()
+    app.state.store = redis_state
     app.state.clickhouse = SimpleNamespace(insert_logs=insert_logs)
     app.state.redis_publisher = SimpleNamespace(publish_logs=AsyncMock())
-    record = {"message": "accepted before outage"}
-    await app.state.ingest_queue.put(record)
+    record = {"message": "accepted before outage", "timestamp": datetime.now(timezone.utc)}
+    await redis_state.enqueue([record])
     task = asyncio.create_task(_flush_loop(app))
     try:
         await asyncio.wait_for(delivered.wait(), timeout=2)

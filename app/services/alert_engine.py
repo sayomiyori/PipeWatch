@@ -1,143 +1,88 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from uuid import uuid4
 
 import httpx
 
 from app.config import settings
 from app.middleware.metrics import ALERT_EVALUATIONS, ALERTS_FIRED
-from app.models.log_entry import LogLevel
+from app.services.callback import post_callback
 from app.services.clickhouse import ClickHouseService
 
-
-def _chat_id_for_rule(rule_data: dict[str, Any]) -> str | None:
-    rid = rule_data.get("notification_target") or settings.TELEGRAM_CHAT_ID
-    return rid.strip() if rid else None
+logger = logging.getLogger(__name__)
 
 
 async def _send_telegram(bot_token: str, chat_id: str, text: str) -> None:
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(
-            url,
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "disable_web_page_preview": True,
-            },
+    async with httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False) as client:
+        response = await client.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
         )
-        r.raise_for_status()
+        response.raise_for_status()
 
 
 class AlertEngine:
-    """
-    Periodic rule evaluator (default ALERT_EVAL_INTERVAL_SECONDS).
-    Uses ClickHouse COUNT with optional min_level (>=) and service filter.
-    Sends HTTP callback and/or Telegram when threshold is met (with cooldown).
-    """
-
     def __init__(self, clickhouse: ClickHouseService) -> None:
         self._clickhouse = clickhouse
 
-    async def run_forever(self, app) -> None:
-        interval = max(5.0, float(settings.ALERT_EVAL_INTERVAL_SECONDS))
-
-        while True:
-            await asyncio.sleep(interval)
-
-            rules: dict[str, Any] = getattr(app.state, "alert_rules", {})
-            if not rules:
+    async def evaluate_once(self, app) -> None:
+        store = app.state.store
+        scopes = await store.redis.smembers(f"{store.prefix}:alerts:scopes")
+        for scope in scopes:
+            tenant_id = "" if scope == "standalone" else scope
+            if settings.PLATFORM_AUTH_ENABLED and not tenant_id:
                 continue
-
-            if not hasattr(app.state, "alert_last_fire"):
-                app.state.alert_last_fire = {}
-
-            last_fire: dict[str, datetime] = app.state.alert_last_fire
-            now = datetime.now(timezone.utc)
-            events: list[dict[str, Any]] = getattr(app.state, "alert_events", [])
-
-            for rule_id, rule_data in list(rules.items()):
+            if not settings.PLATFORM_AUTH_ENABLED and tenant_id:
+                continue
+            for rule_id, rule in (await store.rules(tenant_id)).items():
                 try:
-                    window_minutes = int(rule_data.get("window_minutes", 1))
-                    window_seconds = window_minutes * 60
-                    threshold_count = int(rule_data.get("threshold", 1))
-                    service = rule_data.get("service_filter") or None
-                    min_level_raw = rule_data.get("level_filter")
-                    min_level: LogLevel | None = (
-                        min_level_raw if isinstance(min_level_raw, str) else None
-                    )
-
-                    from_ts = now - timedelta(seconds=window_seconds)
-
-                    cnt = await asyncio.to_thread(
-                        self._clickhouse.count_logs,
-                        service,
-                        None,
-                        None,
-                        from_ts,
-                        now,
-                        None,
-                        min_level,
+                    now = datetime.now(timezone.utc)
+                    count = await asyncio.to_thread(
+                        self._clickhouse.count_logs, service=rule.get("service_filter"),
+                        min_level_gte=rule.get("level_filter"),
+                        from_ts=now - timedelta(minutes=rule["window_minutes"]), to_ts=now,
+                        tenant_id=tenant_id,
                     )
                     ALERT_EVALUATIONS.inc()
-
-                    if cnt < threshold_count:
+                    if count < rule["threshold"]:
                         continue
-
-                    rule_cooldown = float(rule_data.get("cooldown_minutes", settings.ALERT_COOLDOWN_SECONDS / 60.0)) * 60.0
-                    # Cooldown: avoid spamming Telegram/callback every tick.
-                    prev = last_fire.get(rule_id)
-                    if prev is not None and rule_cooldown > 0:
-                        if (now - prev).total_seconds() < rule_cooldown:
-                            continue
-
                     event = {
-                        "rule_id": rule_id,
-                        "rule_name": rule_data.get("name"),
-                        "ts": now.isoformat(),
-                        "count": cnt,
-                        "threshold": threshold_count,
-                        "window_seconds": window_seconds,
-                        "service": service,
-                        "min_level": min_level,
+                        "event_id": str(uuid4()), "rule_id": rule_id, "rule_name": rule["name"],
+                        "ts": now.isoformat(), "count": count, "threshold": rule["threshold"],
+                        "window_seconds": rule["window_minutes"] * 60,
+                        "service": rule.get("service_filter"), "min_level": rule.get("level_filter"),
+                        "delivery_status": "pending" if rule.get("notification_channel") else "not_requested",
                     }
-                    events.append(event)
-                    last_fire[rule_id] = now
+                    if not await store.begin_event(tenant_id, rule_id, event, rule["cooldown_minutes"] * 60, rule):
+                        continue
                     ALERTS_FIRED.inc()
-
-                    channel = rule_data.get("notification_channel")
-                    target = rule_data.get("notification_target")
-                    if channel == "webhook" and target:
-                        asyncio.create_task(self._post_callback(target, event))
-
-                    token = settings.TELEGRAM_BOT_TOKEN.strip()
-                    if channel == "telegram" and target:
-                        chat_id = target.strip()
-                        if token and chat_id:
-                            text = (
-                                f"🚨 PipeWatch: {rule_data.get('name', rule_id)}\n"
-                                f"Count: {cnt} (threshold {threshold_count})\n"
-                                f"Window: {window_seconds}s\n"
-                                f"Service: {service or 'any'}\n"
-                                f"Min level: {min_level or 'any'}"
-                            )
-                            asyncio.create_task(self._send_telegram_safe(token, chat_id, text))
+                    channel, target = rule.get("notification_channel"), rule.get("notification_target")
+                    if not channel:
+                        continue
+                    try:
+                        if channel == "webhook":
+                            await post_callback(target, event)
+                        elif channel == "telegram" and settings.TELEGRAM_NOTIFICATIONS_ENABLED and not settings.PLATFORM_AUTH_ENABLED and settings.TELEGRAM_BOT_TOKEN:
+                            await _send_telegram(settings.TELEGRAM_BOT_TOKEN, target, f"PipeWatch: {rule['name']}; count={count}")
+                        else:
+                            raise ValueError("Notification channel disabled")
+                    except Exception:
+                        event["delivery_status"] = "failed"
+                        # Do not expose callback URLs, HTTP exceptions or Telegram tokens.
+                        logger.warning("Alert notification failed")
+                    else:
+                        event["delivery_status"] = "delivered"
+                    await store.finish_event(tenant_id, event)
                 except Exception:
-                    continue
+                    logger.warning("Alert evaluation failed; durable rule retained")
 
-    async def _post_callback(self, callback_url: str, payload: dict[str, Any]) -> None:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(callback_url, json=payload)
-        except Exception:
-            pass
-
-    async def _send_telegram_safe(
-        self, token: str, chat_id: str, text: str
-    ) -> None:
-        try:
-            await _send_telegram(token, chat_id, text)
-        except Exception:
-            pass
+    async def run_forever(self, app) -> None:
+        while True:
+            await asyncio.sleep(max(5, settings.ALERT_EVAL_INTERVAL_SECONDS))
+            try:
+                await self.evaluate_once(app)
+            except Exception:
+                logger.warning("Alert state unavailable; evaluation paused")

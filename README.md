@@ -1,13 +1,18 @@
 # PipeWatch
 
-Local verification on 2026-10-09: 25 tests passed with real ClickHouse/Redis;
-Ruff and source HTTP/WebSocket/CLI checks passed. Graceful shutdown drains the
-queue after completing in-flight inserts; query handlers use a threadpool.
+Local hardening provides opt-in AuthFortress authorization and tenant isolation,
+Redis-backed ingest/rules/history, DNS-pinned callback egress and loopback Compose
+ports. Standalone mode remains the default. See [the contract](specs/local-hardening.md)
+and [local verification/runbook](docs/local-hardening.md) for evidence and limits.
+IPv6 translation/tunnels are denied even in trusted numeric exceptions. Metrics
+collection/exposure is disabled in platform mode and when `METRICS_ENABLED=false`;
+standalone service labels use one bounded `all` bucket.
 
-Deployment boundary: standalone APIs and alert management have no identity or
-tenant isolation. Alert callbacks can target private network addresses. Keep
-this service on a trusted private network until authorization and egress policy
-are implemented. In-memory queues, rules and history do not survive process loss.
+A successful ingest response means durably accepted by Redis, not yet flushed to
+ClickHouse. Replay after process loss is at least once: an ambiguous ClickHouse
+acknowledgement may duplicate rows. Redis AOF (`appendfsync=always`), no eviction
+and a persistent volume are required; losing the volume loses pending data.
+Public deployment and live Telegram activation are outside local verification.
 
 [![CI](https://github.com/sayomiyori/PipeWatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sayomiyori/PipeWatch/actions)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](#)
@@ -90,7 +95,11 @@ Real-time log aggregator: **FastAPI → ClickHouse** (MergeTree, TTL, bloom filt
 
 **ClickHouse over PostgreSQL/Elasticsearch** — log data is append-only, high-volume, and queried by time range + filters. ClickHouse's columnar storage with MergeTree engine handles millions of rows with sub-second aggregation. TTL auto-deletes old data. Bloom filter index on `trace_id` for efficient trace lookup.
 
-**Redis Streams over Kafka for live tail** — live tail is a fan-out to connected WebSocket clients, not a durable message queue. Redis Streams gives exactly the right semantics: ordered, real-time, lightweight. No need for consumer groups or offset management here.
+**Redis for accepted ingest and live tail** — Redis lists hold a bounded durable
+backlog and claimed batch until confirmed ClickHouse insertion. One renewable
+lease fences acknowledgement. Separate Redis Streams fan out confirmed logs to
+WebSocket clients; live tail publication remains best effort. Tenant streams use
+separate names, and old standalone streams are inaccessible in platform mode.
 
 **Alert engine inside the app (not Celery)** — alert evaluation is a lightweight ClickHouse COUNT query every 30 seconds. No need for a separate worker process. asyncio background task keeps it simple and reduces infrastructure.
 
@@ -212,12 +221,19 @@ pipewatch alerts list
 |----------|---------|-------------|
 | `CLICKHOUSE_*` | see config | ClickHouse connection |
 | `REDIS_*` | see config | Redis for streams |
+| `REDIS_KEY_PREFIX` | pipewatch | Queue/rule/tenant stream namespace; keep stable across restarts |
+| `PLATFORM_AUTH_ENABLED` | false | Require AuthFortress bearer and X-Tenant-ID headers |
+| `AUTHFORTRESS_URL` | empty | Identity service base URL, required in platform mode |
+| `AUTHFORTRESS_TIMEOUT_SECONDS` | 5 | Fresh authorization request timeout |
+| `CALLBACK_TRUSTED_ORIGINS` | empty | Exact numeric private/loopback origins for controlled local tests |
+| `TELEGRAM_NOTIFICATIONS_ENABLED` | false | Explicit standalone Telegram opt-in; unavailable in platform mode |
 | `ALERT_EVAL_INTERVAL_SECONDS` | 30 | Alert engine tick |
 | `ALERT_COOLDOWN_SECONDS` | 300 | Min seconds between fires per rule |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram Bot API token |
 | `TELEGRAM_CHAT_ID` | — | Default Telegram chat ID |
 | `METRICS_ENABLED` | true | Enable `/metrics` |
 | `PIPEWATCH_BASE_URL` | — | CLI default base URL |
+| `PIPEWATCH_TOKEN`, `PIPEWATCH_TENANT_ID` | empty | CLI bearer/tenant forwarded through HTTP and WebSocket headers |
 
 ## Running Tests
 

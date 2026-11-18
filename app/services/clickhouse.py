@@ -68,6 +68,9 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
     def ensure_tables(self) -> None:
         self._client.command(self._queries.create_database)
         self._client.command(self._queries.create_logs_table)
+        # Additive adoption keeps historical standalone rows in the empty scope.
+        self._client.command(f"ALTER TABLE {settings.CLICKHOUSE_DATABASE}.logs ADD COLUMN IF NOT EXISTS tenant_id String DEFAULT ''")
+        self._client.command(f"ALTER TABLE {settings.CLICKHOUSE_DATABASE}.logs ADD COLUMN IF NOT EXISTS log_id String DEFAULT ''")
 
     # ------------------------------------------------------------------ inserts
 
@@ -75,7 +78,7 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
         if not rows:
             return
         column_names = ["timestamp", "service", "level", "message",
-                        "trace_id", "span_id", "metadata", "host"]
+                        "trace_id", "span_id", "metadata", "host", "tenant_id", "log_id"]
         data = [
             (
                 r["timestamp"],
@@ -86,6 +89,8 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
                 r.get("span_id", ""),
                 r.get("metadata", "{}"),
                 r.get("host", ""),
+                r.get("tenant_id", ""),
+                r.get("log_id", ""),
             )
             for r in rows
         ]
@@ -106,8 +111,9 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
         to_ts: datetime | None = None,
         q: str | None = None,
         min_level_gte: LogLevel | None = None,
+        tenant_id: str = "",
     ) -> str:
-        parts: list[str] = []
+        parts: list[str] = [f"tenant_id = '{_escape_sql_string(tenant_id)}'"]
         if service:
             parts.append(f"service = '{_escape_sql_string(service)}'")
         if level:
@@ -156,9 +162,10 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
         where_sql = self._build_where(
-            service, level, trace_id, from_ts, to_ts, q, None
+            service, level, trace_id, from_ts, to_ts, q, None, tenant_id
         )
         limit = max(1, min(int(limit), 5000))
         offset = max(0, int(offset))
@@ -167,7 +174,7 @@ TTL toDateTime(timestamp) + INTERVAL 30 DAY
 SELECT timestamp, service, level, message, trace_id, span_id, metadata, host
 FROM {db}.logs
 WHERE {where_sql}
-ORDER BY timestamp DESC
+ORDER BY timestamp DESC, log_id DESC
 LIMIT {limit} OFFSET {offset}
 """
         return self._rows_to_dicts(self._client.query(query))
@@ -181,9 +188,10 @@ LIMIT {limit} OFFSET {offset}
         to_ts: datetime | None = None,
         q: str | None = None,
         min_level_gte: LogLevel | None = None,
+        tenant_id: str = "",
     ) -> int:
         where_sql = self._build_where(
-            service, level, trace_id, from_ts, to_ts, q, min_level_gte
+            service, level, trace_id, from_ts, to_ts, q, min_level_gte, tenant_id
         )
         db = settings.CLICKHOUSE_DATABASE
         result = self._client.query(
@@ -195,10 +203,11 @@ LIMIT {limit} OFFSET {offset}
         self,
         from_ts: datetime | None = None,
         to_ts: datetime | None = None,
+        tenant_id: str = "",
     ) -> dict[str, Any]:
         db = settings.CLICKHOUSE_DATABASE
-        where = self._build_where(from_ts=from_ts, to_ts=to_ts)
-        error_where = self._build_where(level="error", from_ts=from_ts, to_ts=to_ts)
+        where = self._build_where(from_ts=from_ts, to_ts=to_ts, tenant_id=tenant_id)
+        error_where = self._build_where(level="error", from_ts=from_ts, to_ts=to_ts, tenant_id=tenant_id)
 
         total_count = self._scalar(
             self._client.query(f"SELECT count() FROM {db}.logs WHERE {where}")
@@ -247,12 +256,13 @@ GROUP BY message, service ORDER BY cnt DESC LIMIT 10
             "top_errors": top_errors,
         }
 
-    def query_services(self) -> list[dict[str, Any]]:
+    def query_services(self, tenant_id: str = "") -> list[dict[str, Any]]:
         db = settings.CLICKHOUSE_DATABASE
         result = self._client.query(f"""
 SELECT service, max(timestamp) AS last_seen, count() AS total_logs
 FROM {db}.logs
-GROUP BY service ORDER BY last_seen DESC
+WHERE {self._build_where(tenant_id=tenant_id)}
+GROUP BY service ORDER BY last_seen DESC, service ASC LIMIT 500
 """)
         rows = result.result_rows or []
         return [
@@ -272,9 +282,10 @@ GROUP BY service ORDER BY last_seen DESC
         from_ts: datetime | None = None,
         to_ts: datetime | None = None,
         limit: int = 50,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
         """Kept for backward compat / alert engine."""
-        where_sql = self._build_where(service, level, None, from_ts, to_ts)
+        where_sql = self._build_where(service, level, None, from_ts, to_ts, tenant_id=tenant_id)
         limit = max(1, min(int(limit), 5000))
         group_col = "service" if group_by == "service" else "level"
         db = settings.CLICKHOUSE_DATABASE
@@ -286,12 +297,12 @@ GROUP BY k ORDER BY cnt DESC LIMIT {limit}
         rows = result.result_rows if hasattr(result, "result_rows") else []
         return [{"k": r[0], "cnt": r[1]} for r in rows]
 
-    def count_by_trace_ids(self, trace_ids: list[str]) -> int:
+    def count_by_trace_ids(self, trace_ids: list[str], tenant_id: str = "") -> int:
         if not trace_ids:
             return 0
         in_list = ", ".join(f"'{_escape_sql_string(t)}'" for t in trace_ids)
         db = settings.CLICKHOUSE_DATABASE
         result = self._client.query(
-            f"SELECT count() FROM {db}.logs WHERE trace_id IN ({in_list})"
+            f"SELECT count() FROM {db}.logs WHERE {self._build_where(tenant_id=tenant_id)} AND trace_id IN ({in_list})"
         )
         return self._scalar(result)
