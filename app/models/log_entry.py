@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any, Literal
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 LogLevel = Literal["debug", "info", "warn", "error", "fatal"]
 
@@ -32,16 +33,18 @@ def level_from_int(value: int) -> LogLevel:
 
 
 class LogEntryCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     service: str = Field(..., min_length=1, max_length=256)
     level: LogLevel
-    message: str
-    trace_id: str | None = None
-    span_id: str | None = None
+    message: str = Field(max_length=16384)
+    trace_id: str | None = Field(default=None, max_length=256)
+    span_id: str | None = Field(default=None, max_length=256)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    host: str | None = None
+    host: str | None = Field(default=None, max_length=256)
 
     def to_record(self, timestamp: datetime) -> dict[str, Any]:
         return {
+            "log_id": str(uuid4()),
             "timestamp": timestamp,
             "service": self.service,
             "level": level_to_int(self.level),
